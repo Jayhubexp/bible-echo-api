@@ -61,25 +61,12 @@ app.Run();
 static async Task<IResult> Search(string? q, string? preceding, bool? spoken, IBibleRepository repo, IScriptureMatcher matcher, CancellationToken ct) {
     if (string.IsNullOrWhiteSpace(q) || q.Length > 2000)
         return Results.BadRequest(new {error="Enter up to 2,000 characters."});
-    var passages = new List<object>();
     if (preceding?.Length > 300) return Results.BadRequest(new {error="Context exceeds 300 characters."});
-    var citations = SpokenCitationLexer.Parse(q, speechAliases: spoken == true);
-    if (spoken == true && !string.IsNullOrWhiteSpace(preceding)) {
-        var earlier = SpokenCitationLexer.Parse(preceding, speechAliases: true);
-        var combined = SpokenCitationLexer.Parse(preceding + " " + q, speechAliases: true);
-        int consumed = 0;
-        while (consumed < earlier.Count && consumed < combined.Count &&
-               earlier[consumed].FormattedReference == combined[consumed].FormattedReference) consumed++;
-        citations = combined.Skip(consumed).ToList();
-    }
-    foreach (var reference in citations.DistinctBy(r => r.FormattedReference)) {
-        var verses = await repo.GetVersesAsync(reference.Book,reference.Chapter,reference.VerseStart,reference.VerseEnd,cancellationToken:ct);
-        if (verses.Count > 0 && (reference.VerseEnd == null || verses[^1].Verse == reference.VerseEnd))
-            passages.Add(new { reference=reference.FormattedReference, verses });
-    }
-    if (spoken != true && citations.Count == 0) {
+    var resultSet = await CitationLookup.Resolve(q,preceding,spoken==true,repo,ct);
+    var passages = resultSet.Passages;
+    if (spoken != true && passages.Count == 0 && resultSet.Unresolved.Count == 0) {
         var result = await matcher.MatchScriptureAsync(q,cancellationToken:ct);
         if (result != null) passages.Add(new {reference=result.MatchedReference, verses=result.Verses});
     }
-    return Results.Ok(new {passages});
+    return Results.Ok(resultSet);
 }

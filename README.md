@@ -20,7 +20,7 @@ Routes are available under /api/v1 and the short /api alias. Responses are JSON.
 |---|---|---|---|
 | GET | /health | none | status and version |
 | GET | /scripture/search | q, optional spoken=true and preceding context | passages with reference and ordered KJV verses, empty array on no match |
-| POST | /transcribe | audio/wav binary, canonical 44-byte RIFF header, mono PCM16 at 16 or 24 kHz | transcript |
+| POST | /transcribe | audio/wav binary, canonical 44-byte RIFF header, mono PCM16 at 16 or 24 kHz | transcript; with `?detect=true`, also passages and unresolved reference messages. Optional `preceding` accepts up to 300 characters of prior transcript. |
 | POST | /backgrounds/generate | JSON with prompt (1–1500 characters) | image as data URL or temporary signed HTTPS URL |
 
 Spoken mode only returns explicit citations resolved against the KJV. Manual lookup also supports the desktop full-text matcher. Each verse has book, chapter, verse, text, version and formattedReference. Bad input returns 400/415, oversized bodies 413, missing credentials 503, model failures 502/429 and upstream timeouts 504. The original scripture, transcription and generation routes are stateless. CORS governs browser origins. The deployed model routes are public and consume the server account's quota. Audio, prompts and credentials are excluded from application request logs.

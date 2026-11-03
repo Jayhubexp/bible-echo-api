@@ -30,7 +30,8 @@ public sealed class MetaClient(HttpClient client, IConfiguration config, IHttpCl
             throw new MetaFailure(502,"Meta returned an unreadable draft.");
         }
     }
-    public static async Task<IResult> Transcribe(HttpRequest request,MetaClient meta,CancellationToken ct) {
+    public static async Task<IResult> Transcribe(HttpRequest request,MetaClient meta,BibleEcho.Core.Interfaces.IBibleRepository repo,bool? detect,string? preceding,CancellationToken ct) {
+        if (preceding?.Length>300) return Results.BadRequest(new {error="Context exceeds 300 characters."});
         if (request.ContentType != "audio/wav") return Results.Json(new {error="Send PCM audio/wav."},statusCode:415);
         using var stream = new MemoryStream();
         await request.Body.CopyToAsync(stream,ct);
@@ -44,7 +45,10 @@ public sealed class MetaClient(HttpClient client, IConfiguration config, IHttpCl
         var json = await meta.Send("asr/transcribe",form,ct);
         if (json.ValueKind != JsonValueKind.Object || !json.TryGetProperty("transcript",out var value) || value.ValueKind != JsonValueKind.String)
             throw new MetaFailure(502,"Meta returned no transcript field.");
-        return Results.Ok(new { transcript=value.GetString() });
+        var transcript=value.GetString()!;
+        if(detect!=true)return Results.Ok(new {transcript});
+        var matches=await BibleEcho.AI.CitationLookup.Resolve(transcript.Length>2000?transcript[^2000..]:transcript,preceding,true,repo,ct);
+        return Results.Ok(new {transcript,matches.Passages,matches.Unresolved});
     }
     static bool ValidWav(byte[] b) {
         if (b.Length <= 44 || b.Length % 2 != 0) return false;

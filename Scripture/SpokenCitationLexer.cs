@@ -106,12 +106,21 @@ public static class SpokenCitationLexer
             return Array.Empty<ScriptureReference>();
 
         var normalized = NormalizeSpokenNumbers(spokenText);
-        if (speechAliases) normalized = MisheardLuke.Replace(normalized, "Luke");
+        if (speechAliases) {
+            normalized = Regex.Replace(normalized, @"\b(verses?)[.,]\s*(?=\d)", "$1 ", RegexOptions.IgnoreCase);
+            normalized = Regex.Replace(normalized, @"\b([a-z]+)\1\b(?=\s+(?:chapter\s+)?\d)", m =>
+                CanonicalBooks.ContainsKey(m.Groups[1].Value) ? m.Groups[1].Value : m.Value, RegexOptions.IgnoreCase);
+            normalized = MisheardLuke.Replace(normalized, "Luke");
+        }
         var matches = CitationPattern.Matches(normalized);
         var results = new List<ScriptureReference>();
 
         foreach (Match match in matches)
         {
+            // A chunk can end mid-citation. Wait for the number before sending a slide.
+            if (speechAliases && Regex.IsMatch(normalized[(match.Index+match.Length)..],
+                @"^\s*[.,]?\s*(?:(?:from\s+)?verses?|(?:to|through)(?:\s+verses?)?|:)\s*[.,]?\s*$", RegexOptions.IgnoreCase))
+                continue;
             var bookKey = match.Groups[1].Value.Trim();
             if (!CanonicalBooks.TryGetValue(bookKey, out var canonicalBook))
                 continue;

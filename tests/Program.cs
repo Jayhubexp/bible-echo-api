@@ -11,6 +11,14 @@ const string sermon="We are going to turn our Bibles to look chapter 18. from ve
 var luke=SpokenCitationLexer.Parse(sermon,speechAliases:true).Single();
 Check("Misheard Luke resolves to the complete range",luke.FormattedReference=="Luke 18:4-7");
 var bible=new SqliteBibleRepository(Path.Combine(AppContext.BaseDirectory,"data","bible.db"));
+var invalidRomans=await CitationLookup.Resolve("Romans chapter ten verse thirty.",null,true,bible,default);
+Check("Romans 10:30 stays off screen and explains chapter bounds",invalidRomans.Passages.Count==0 && invalidRomans.Unresolved.Single().Contains("Romans 10:30. Romans 10 has verses 1–21"));
+var pendingRomans=await CitationLookup.Resolve("Romans chapter ten verse.",null,true,bible,default);
+Check("Incomplete verse number does not project the whole chapter",pendingRomans.Passages.Count==0 && pendingRomans.Unresolved.Count==0);
+var validRomans=await CitationLookup.Resolve("Thirteen.","Romans chapter ten verse.",true,bible,default);
+Check("Split Romans 10:13 resolves on the completing chunk",JsonSerializer.Serialize(validRomans.Passages).Contains("\"reference\":\"Romans 10:13\""));
+var repeatedBook=await CitationLookup.Resolve("RomansRomans chapter ten verse thirteen.",null,true,bible,default);
+Check("Live Meta duplicated book resolves to Romans 10:13",JsonSerializer.Serialize(repeatedBook.Passages).Contains("\"reference\":\"Romans 10:13\""));
 var passage=await bible.GetVersesAsync(luke.Book,luke.Chapter,luke.VerseStart,luke.VerseEnd);
 Check("Projection starts at Luke 18:4 and includes verses 5–7",passage.Select(v=>v.Verse).SequenceEqual(new[]{4,5,6,7}));
 Check("Ordinary speech does not infer Luke",SpokenCitationLexer.Parse("Look at chapter 18, verse 4. Look chapter 18 is interesting.",true).Count==0);
@@ -58,6 +66,27 @@ var http=new HttpClient(new Handler(async req=>{
     return Json(JsonSerializer.Serialize(new {choices=new[]{new {message=new {content=draft}}}}));
 })){BaseAddress=new Uri("https://example.invalid/")};
 var db=new Store(http,config);var meta=new MetaClient(http,config,new Factory(http));
+// Exercise the /transcribe result contract with deterministic speech and the real KJV.
+string heard="Romans chapter ten verse thirteen.";
+using var voiceHttp=new HttpClient(new Handler(_=>Task.FromResult(Json(JsonSerializer.Serialize(new {transcript=heard}))))){BaseAddress=new Uri("https://example.invalid/")};
+var voice=new MetaClient(voiceHttp,config,new Factory(voiceHttp));
+async Task<JsonElement> Transcription(bool detect){
+    var request=new Microsoft.AspNetCore.Http.DefaultHttpContext().Request;
+    request.ContentType="audio/wav";request.Body=new MemoryStream();
+    using var writer=new BinaryWriter(request.Body,System.Text.Encoding.UTF8,true);
+    writer.Write("RIFF"u8);writer.Write(38);writer.Write("WAVEfmt "u8);writer.Write(16);
+    writer.Write((short)1);writer.Write((short)1);writer.Write(16000);writer.Write(32000);
+    writer.Write((short)2);writer.Write((short)16);writer.Write("data"u8);writer.Write(2);writer.Write((short)0);
+    request.Body.Position=0;
+    var result=(Microsoft.AspNetCore.Http.IValueHttpResult)await MetaClient.Transcribe(request,voice,bible,detect,null,default);
+    return JsonSerializer.SerializeToElement(result.Value,Rules.Json);
+}
+var combined=await Transcription(true);
+Check("Transcription immediately includes the validated verse",combined.GetProperty("passages")[0].GetProperty("verses")[0].GetProperty("verse").GetInt32()==13);
+heard="Romans chapter ten verse thirty.";
+var missing=await Transcription(true);
+Check("Invalid transcript returns only operator feedback",missing.GetProperty("unresolved").GetArrayLength()==1 && missing.GetProperty("passages").GetArrayLength()==0);
+Check("Older transcription clients retain their response shape",!(await Transcription(false)).TryGetProperty("passages",out _));
 draft="""{"sections":[{"label":"Verse","text":"Quiet morning."}],"arrangement":[0],"background":null,"lines":2,"size":4}""";
 var formatted=await Assistant.Prepare(new("format","quiet morning",true),meta,db,default);
 Check("Validated AI formatting draft",(string?)formatted["sections"]![0]!["text"]=="Quiet morning.");
