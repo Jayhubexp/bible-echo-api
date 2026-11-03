@@ -3,3 +3,4 @@ obj
 .git
 .env*
 publish
+tests

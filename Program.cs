@@ -1,3 +1,4 @@
+using BibleEcho.Workspace;
 using BibleEcho.AI;
 using BibleEcho.Core.Interfaces;
 using BibleEcho.Data;
@@ -9,7 +10,7 @@ builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.W
 builder.Logging.AddFilter("System.Net.Http.HttpClient", LogLevel.Warning);
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.WithOrigins(
     (builder.Configuration["FRONTEND_ORIGIN"] ?? "http://localhost:5173").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-    .WithMethods("GET","POST").WithHeaders("Content-Type")));
+    .WithExposedHeaders("X-Echo-Time").WithMethods("GET","POST","PUT","DELETE").WithHeaders("Content-Type","X-Operator-Key","X-Controller")));
 builder.Services.AddSingleton<IBibleRepository>(new SqliteBibleRepository(Path.Combine(AppContext.BaseDirectory,"data","bible.db")));
 builder.Services.AddSingleton<IScriptureMatcher, ScriptureMatchingEngine>();
 builder.Services.AddHttpClient<MetaClient>(c => {
@@ -17,16 +18,25 @@ builder.Services.AddHttpClient<MetaClient>(c => {
     c.Timeout = TimeSpan.FromSeconds(90);
     c.MaxResponseContentBufferSize = 24 * 1024 * 1024;
 });
+builder.Services.AddHttpClient("generated-image", c => {
+    c.MaxResponseContentBufferSize=24*1024*1024;
+    c.Timeout=TimeSpan.FromSeconds(25);
+}).ConfigurePrimaryHttpMessageHandler(()=>new HttpClientHandler {AllowAutoRedirect=false});
+Endpoints.Configure(builder);
 var app = builder.Build();
 app.UseCors();
+app.UseRateLimiter();
+Endpoints.Map(app);
 app.Use(async (ctx,next) => {
     try { await next(); }
     catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested) { }
     catch (Exception e) when (!ctx.Response.HasStarted) {
         var (code,message) = e switch {
+            WorkspaceError w => (w.Status,w.Message),
             MetaFailure m => (m.Status,m.Message),
             BadHttpRequestException b => (b.StatusCode,"Invalid or oversized request."),
             OperationCanceledException => (504,"Meta timed out. Please try again."),
+            HttpRequestException when ctx.Request.Path.StartsWithSegments("/api/v1/workspace") => (502,"Workspace provider unreachable. Check connectivity and refresh before retrying."),
             HttpRequestException => (502,"Could not reach Meta. Please try again."),
             System.Text.Json.JsonException => (502,"Meta returned an unreadable response."),
             _ => (500,"The API could not complete this request.")
@@ -40,8 +50,8 @@ foreach (var prefix in new[]{"/api","/api/v1"}) {
     var api = app.MapGroup(prefix);
     api.MapGet("/health", () => new { status="ok",version=1 });
     api.MapGet("/scripture/search", Search);
-    api.MapPost("/transcribe", MetaClient.Transcribe);
-    api.MapPost("/backgrounds/generate", MetaClient.Generate);
+    api.MapPost("/transcribe", MetaClient.Transcribe).RequireRateLimiting("model");
+    api.MapPost("/backgrounds/generate", MetaClient.Generate).RequireRateLimiting("model");
 }
 var repo = app.Services.GetRequiredService<IBibleRepository>();
 if ((await repo.GetVersesAsync("Genesis",1,1)).Count != 1)
@@ -53,10 +63,10 @@ static async Task<IResult> Search(string? q, string? preceding, bool? spoken, IB
         return Results.BadRequest(new {error="Enter up to 2,000 characters."});
     var passages = new List<object>();
     if (preceding?.Length > 300) return Results.BadRequest(new {error="Context exceeds 300 characters."});
-    var citations = SpokenCitationLexer.Parse(q);
+    var citations = SpokenCitationLexer.Parse(q, speechAliases: spoken == true);
     if (spoken == true && !string.IsNullOrWhiteSpace(preceding)) {
-        var earlier = SpokenCitationLexer.Parse(preceding);
-        var combined = SpokenCitationLexer.Parse(preceding + " " + q);
+        var earlier = SpokenCitationLexer.Parse(preceding, speechAliases: true);
+        var combined = SpokenCitationLexer.Parse(preceding + " " + q, speechAliases: true);
         int consumed = 0;
         while (consumed < earlier.Count && consumed < combined.Count &&
                earlier[consumed].FormattedReference == combined[consumed].FormattedReference) consumed++;

@@ -83,6 +83,10 @@ public static class SpokenCitationLexer
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex CitationPattern;
+    private const string VerseMarker = @"\s*[.,;]?\s*(?:from\s+)?(?:verses?\b|v\.)\s*";
+    // "look" is common sermon language. Require both an explicit chapter and verse.
+    private static readonly Regex MisheardLuke = new(
+        $@"\blook(?=\s+chapter\s+\d+{VerseMarker}\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     static SpokenCitationLexer()
     {
@@ -92,17 +96,17 @@ public static class SpokenCitationLexer
         // Pattern matches:
         // [Book Name] (chapter)? [ChapterNum] (:|verse)? [VerseNum] (to|-|through [VerseEndNum])?
         CitationPattern = new Regex(
-            $@"\b({booksPattern})\s+(?:chapter\s+)?(\d+)(?:\s*(?::|verse|v\.)\s*(\d+)(?:\s*(?:-|to|through|–)\s*(\d+))?)?",
+            $@"\b({booksPattern})\s+(?:chapter\s+)?(\d+)(?:(?:\s*:\s*|{VerseMarker})(\d+)(?:\s*(?:-|to|through|–)\s*(?:verses?\s+)?(\d+))?)?",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
     }
 
-    public static IReadOnlyList<ScriptureReference> Parse(string spokenText)
+    public static IReadOnlyList<ScriptureReference> Parse(string spokenText, bool speechAliases = false)
     {
         if (string.IsNullOrWhiteSpace(spokenText))
             return Array.Empty<ScriptureReference>();
 
-        var normalized = Regex.Replace(NormalizeSpokenNumbers(spokenText), @",\s*(?=verses?\b)", " ", RegexOptions.IgnoreCase);
-        normalized = Regex.Replace(normalized, @"\bverses\b", "verse", RegexOptions.IgnoreCase);
+        var normalized = NormalizeSpokenNumbers(spokenText);
+        if (speechAliases) normalized = MisheardLuke.Replace(normalized, "Luke");
         var matches = CitationPattern.Matches(normalized);
         var results = new List<ScriptureReference>();
 
