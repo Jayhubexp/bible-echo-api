@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: bible-echo-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: MODEL_API_KEY
+        sync: false
